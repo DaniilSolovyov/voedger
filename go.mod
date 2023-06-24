@@ -49,6 +49,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/stretchr/objx v0.5.0 // indirect
+	github.com/theodesp/go-object-pool v0.0.0-20180101224249-eef0f2f24c40 // indirect
 	github.com/untillpro/airs-ibusnats v0.0.0-20220602094345-4a16b77c871c // indirect
 	github.com/untillpro/gochips v1.12.1-0.20210610114844-885fd59e2d55 // indirect
 	github.com/untillpro/godif v0.18.0 // indirect

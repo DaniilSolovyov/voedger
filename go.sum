@@ -191,6 +191,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.2 h1:+h33VjcLVPDHtOdpUCuF+7gSuG3yGIftsP1YvFihtJ8=
 github.com/stretchr/testify v1.8.2/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/tarm/serial v0.0.0-20180830185346-98f6abe2eb07/go.mod h1:kDXzergiv9cbyO7IOYJZWg1U88JhDg3PB6klq9Hg2pA=
+github.com/theodesp/go-object-pool v0.0.0-20180101224249-eef0f2f24c40 h1:br0yLQVACjPttWzDf9MvtLMACAjS20bvaB4aCB0o5hk=
+github.com/theodesp/go-object-pool v0.0.0-20180101224249-eef0f2f24c40/go.mod h1:y5fgOIsPXuYoutiL8r5io7xrWbXqxLEcK1WHuEGWMoI=
 github.com/untillpro/airs-ibus v0.0.0-20221105121917-d13e0967180d h1:R1XgQwgeUL1v7n3eg1kkGlCn7T/5NvbHEvYUjUnLeqw=
 github.com/untillpro/airs-ibus v0.0.0-20221105121917-d13e0967180d/go.mod h1:v+HG60Ywc61ZGR8tbZQBOvBnB3g8bxchyh8aluDSs2Q=
 github.com/untillpro/airs-ibusnats v0.0.0-20220602094345-4a16b77c871c h1:SHVDjwkot4RS82P7DSOfLNRRHq92za1KKsmicCvA8hw=
