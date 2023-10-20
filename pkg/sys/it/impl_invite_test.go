@@ -9,15 +9,200 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/sys/invite"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
+	sys_test_template "github.com/voedger/voedger/pkg/vit/testdata"
 )
 
 func TestInvite_BasicUsage(t *testing.T) {
+	require := require.New(t)
+
+	host := "host@email.com"
+	guest := "guest@email.com"
+	wsName := "test_ws"
+
+	cfg := it.NewOwnVITConfig(it.WithApp(istructs.AppQName_test1_app1, it.ProvideApp1,
+		it.WithUserLogin(host, "host_pwd"),
+		it.WithUserLogin(guest, "guest_pwd"),
+		it.WithWorkspaceTemplate(it.QNameApp1_TestWSKind, "test_template", sys_test_template.TestTemplateFS),
+		it.WithChildWorkspace(it.QNameApp1_TestWSKind, wsName, "test_template", "", host, map[string]interface{}{"IntFld": 42}),
+	))
+	vit := it.NewVIT(t, &cfg)
+	defer vit.TearDown()
+
+	ws := vit.WS(istructs.AppQName_test1_app1, wsName)
+	inviteEmailTemplate := "text:" + strings.Join([]string{
+		invite.EmailTemplatePlaceholder_VerificationCode,
+		invite.EmailTemplatePlaceholder_InviteID,
+		invite.EmailTemplatePlaceholder_WSID,
+		invite.EmailTemplatePlaceholder_WSName,
+		invite.EmailTemplatePlaceholder_Email,
+	}, ";")
+	inviteEmailSubject := "you are invited"
+	expireDatetime := vit.Now().UnixMilli()
+	expireDatetimeStr := strconv.FormatInt(expireDatetime, 10)
+	verificationCode := expireDatetimeStr[len(expireDatetimeStr)-6:]
+	roles := "initial.Roles"
+
+	findCDocInviteByID := func(inviteID int64, inviteState int32) (entity []interface{}) {
+		deadline := time.Now().Add(time.Second * 5)
+		for time.Now().Before(deadline) {
+			entity = vit.PostWS(ws, "q.sys.Collection", fmt.Sprintf(`
+			{"args":{"Schema":"sys.Invite"},
+			"elements":[{"fields":[
+				"SubjectKind",
+				"Login",
+				"Email",
+				"Roles",
+				"ExpireDatetime",
+				"VerificationCode",
+				"State",
+				"Created",
+				"Updated",
+				"SubjectID",
+				"InviteeProfileWSID",
+				"sys.ID"
+			]}],
+			"filters":[{"expr":"eq","args":{"field":"sys.ID","value":%d}}]}`, inviteID)).SectionRow(0)
+			if inviteState == int32(entity[6].(float64)) {
+				return
+			}
+		}
+		require.FailNow(fmt.Sprintf("invite [%d] is not in required state [%d] it has state [%d]", inviteID, inviteState, int32(entity[0].(float64))))
+		return
+	}
+
+	findCDocSubjectByLogin := func(login string) []interface{} {
+		return vit.PostWS(ws, "q.sys.Collection", fmt.Sprintf(`
+			{"args":{"Schema":"sys.Subject"},
+			"elements":[{"fields":[
+				"Login",
+				"SubjectKind",
+				"Roles",
+				"sys.ID",
+				"sys.IsActive"
+			]}],
+			"filters":[{"expr":"eq","args":{"field":"Login","value":"%s"}}]}`, login)).SectionRow(0)
+	}
+
+	//Invite guest
+	inviteID := InitiateInvitationByEMail(vit, ws, expireDatetime, guest, roles, inviteEmailTemplate, inviteEmailSubject)
+
+	cDocInvite := findCDocInviteByID(inviteID, invite.State_ToBeInvited)
+	require.Equal(guest, cDocInvite[1])
+	require.Equal(guest, cDocInvite[2])
+	require.Equal(roles, cDocInvite[3])
+	require.Equal(float64(expireDatetime), cDocInvite[4])
+	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[7])
+	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
+
+	//Check that emails were send and guest is invited
+	cDocInvite = findCDocInviteByID(inviteID, invite.State_Invited)
+
+	require.Equal(verificationCode, cDocInvite[5])
+	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
+
+	message := vit.CaptureEmail()
+	ss := strings.Split(message.Body, ";")
+	require.Equal(inviteEmailSubject, message.Subject)
+	require.Equal(it.TestSMTPCfg.GetFrom(), message.From)
+	require.Equal([]string{guest}, message.To)
+	require.Equal(verificationCode, ss[0])
+	require.Equal(strconv.FormatInt(inviteID, 10), ss[1])
+	require.Equal(strconv.FormatInt(int64(ws.WSID), 10), ss[2])
+	require.Equal(wsName, ss[3])
+	require.Equal(guest, ss[4])
+
+	//Join workspace
+	InitiateJoinWorkspace(vit, ws, inviteID, guest, verificationCode)
+
+	findCDocInviteByID(inviteID, invite.State_ToBeJoined)
+
+	cDocInvite = findCDocInviteByID(inviteID, invite.State_Joined)
+	require.Equal(float64(vit.GetPrincipal(istructs.AppQName_test1_app1, guest).ProfileWSID), cDocInvite[10])
+	require.Equal(float64(istructs.SubjectKind_User), cDocInvite[0])
+	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
+
+	cDocJoinedWorkspace := FindCDocJoinedWorkspaceByInvitingWorkspaceWSIDAndLogin(vit, ws.WSID, guest)
+	require.Equal(roles, cDocJoinedWorkspace.roles)
+	require.Equal(wsName, cDocJoinedWorkspace.wsName)
+
+	cDocSubject := findCDocSubjectByLogin(guest)
+
+	require.Equal(guest, cDocSubject[0])
+	require.Equal(float64(istructs.SubjectKind_User), cDocSubject[1])
+	require.Equal(roles, cDocSubject[2])
+}
+
+func TestInvite(t *testing.T) {
+	//t.Run("None -> Invited -> Joined", func(t *testing.T) {
+	//
+	//})
+	//t.Run("None -> Invited -> Joined -> Cancelled", func(t *testing.T) {
+	//
+	//})
+	//t.Run("BasicUsage", func(t *testing.T) {
+	//
+	//})
+	t.Run("Update roles", func(t *testing.T) {
+
+	})
+	t.Run("Left workspace", func(t *testing.T) {
+
+	})
+	t.Run("Cancel from workspace", func(t *testing.T) {
+
+	})
+	//TODO extra test
+	t.Run("Cancel invite", func(t *testing.T) {
+
+	})
+	//
+	//host := "host@email.com"
+	//guest1 := "guest1@email.com"
+	////guest2 := "guest2@email.com"
+	////guest2 := "guest2@email.com"
+	//wsName1 := "test_ws1"
+	//
+	//cfg := it.NewOwnVITConfig(it.WithApp(istructs.AppQName_test1_app1, it.ProvideApp1,
+	//	it.WithUserLogin(host, "host_pwd"),
+	//	it.WithUserLogin(guest1, "guest1_pwd"),
+	//	it.WithWorkspaceTemplate(it.QNameApp1_TestWSKind, "test_template", sys_test_template.TestTemplateFS),
+	//	it.WithChildWorkspace(it.QNameApp1_TestWSKind, wsName1, "test_template", "", host, map[string]interface{}{"IntFld": 1}),
+	//))
+	//vit := it.NewVIT(t, &cfg)
+	//defer vit.TearDown()
+	//
+	//inviteEmailTemplate := "text:" + strings.Join([]string{
+	//	invite.EmailTemplatePlaceholder_VerificationCode,
+	//	invite.EmailTemplatePlaceholder_InviteID,
+	//	invite.EmailTemplatePlaceholder_WSID,
+	//	invite.EmailTemplatePlaceholder_WSName,
+	//	invite.EmailTemplatePlaceholder_Email,
+	//}, ";")
+	//inviteEmailSubject := "you are invited"
+	//expireDatetime := vit.Now().UnixMilli()
+	//expireDatetimeStr := strconv.FormatInt(expireDatetime, 10)
+	//verificationCode := expireDatetimeStr[len(expireDatetimeStr)-6:]
+	//roles := "initial.Roles"
+	//
+	//joinWorkspace := func(ws *it.AppWorkspace, email string) {
+	//	inviteID := InitiateInvitationByEMail(vit, ws, expireDatetime, email, roles, inviteEmailTemplate, inviteEmailSubject)
+	//	vit.CaptureEmail()
+	//
+	//}
+	//
+	//t.Run("Update roles", func(t *testing.T) {
+	//
+	//})
+}
+
+func TestInvite_BasicUsage2(t *testing.T) {
 	//TODO Daniil fix it
 	t.Skip("Daniil fix it https://dev.untill.com/projects/#!639145")
 	require := require.New(t)
