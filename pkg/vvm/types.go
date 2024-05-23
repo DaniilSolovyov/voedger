@@ -157,6 +157,12 @@ type VVMConfig struct {
 	KeyspaceNameSuffix string
 }
 
+func dsfsdf() {
+	e := resultSenderErrorFirst{}
+
+	e.Close()
+}
+
 type resultSenderErrorFirst struct {
 	ctx    context.Context
 	sender ibus.ISender

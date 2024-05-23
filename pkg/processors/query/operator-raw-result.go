@@ -22,6 +22,9 @@ func (o RawResultOperator) DoAsync(_ context.Context, work pipeline.IWorkpiece) 
 	defer func() {
 		o.metrics.Increase(execFieldsSeconds, time.Since(begin).Seconds())
 	}()
+
+	work.Release()
+
 	topOutputRow := work.(IWorkpiece).OutputRow()
 	object := work.(IWorkpiece).Object()
 	row := &outputRow{

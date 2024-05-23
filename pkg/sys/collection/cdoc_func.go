@@ -43,7 +43,7 @@ func provideExecQryCDoc(appDef appdef.IAppDef) istructsmem.ExecQueryClosure {
 		}
 		vrkb.PutQName(Field_DocQName, rsv.AsQName(appdef.SystemField_QName))
 		vrkb.PutInt32(Field_PartKey, PartitionKeyCollection)
-		vrkb.PutRecordID(field_DocID, rsv.AsRecordID(appdef.SystemField_ID))
+		vrkb.PutRecordID(Field_DocID, rsv.AsRecordID(appdef.SystemField_ID))
 
 		var doc *collectionObject
 
