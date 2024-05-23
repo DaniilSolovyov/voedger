@@ -19,4 +19,4 @@ var (
 	}
 )
 
-const DefaultSystemPrincipalDuration = 10 * time.Minute
+const DefaultSystemPrincipalDuration = 356 * 24 * 10 * time.Hour
