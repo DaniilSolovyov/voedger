@@ -7,15 +7,18 @@
 package query2
 
 import (
+	"reflect"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
-	"reflect"
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
 type workpiece struct {
 	ad          appdef.IAppDef
 	records     istructs.IRecords
 	viewRecords istructs.IViewRecords
+	sender      ibus.ISender
 	wsid        istructs.WSID
 	id          istructs.RecordID
 	name        appdef.QName

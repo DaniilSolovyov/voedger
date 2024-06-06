@@ -9,11 +9,12 @@ package query2
 import (
 	"context"
 	"encoding/json"
-
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/sys/collection"
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
+	"net/http"
 )
 
 func newProcessor(ctx context.Context) pipeline.ISyncPipeline {
@@ -107,8 +108,12 @@ func serialize(_ context.Context, w *workpiece) (err error) {
 	w.bb, err = json.Marshal(w.entity)
 	return
 }
-func sendResult(ctx context.Context, w *workpiece) (err error) {
-	//TODO send result somehow
+func sendResult(_ context.Context, w *workpiece) (err error) {
+	w.sender.SendResponse(ibus.Response{
+		ContentType: "application/json",
+		StatusCode:  http.StatusOK,
+		Data:        w.bb,
+	})
 	return nil
 }
 func pipelineFunc(name string, doSync func(ctx context.Context, w *workpiece) (err error)) *pipeline.WiredOperator {
