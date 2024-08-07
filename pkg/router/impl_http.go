@@ -117,11 +117,23 @@ func (s *httpService) GetPort() int {
 	return int(port)
 }
 
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Do stuff here
+		log.Println("REQ >>>", r.RequestURI)
+		// Call the next handler, which can be another middleware in the chain, or the final handler.
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *httpService) registerHandlers(busTimeout time.Duration, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) (err error) {
 	redirectMatcher, err := s.getRedirectMatcher()
 	if err != nil {
 		return err
 	}
+
+	//s.router.Use(loggingMiddleware)
+
 	s.router.HandleFunc("/api/check", corsHandler(checkHandler())).Methods("POST", "OPTIONS").Name("router check")
 	/*
 		launching app from localhost from browser. Trying to execute POST from web app within browser.
@@ -136,9 +148,17 @@ func (s *httpService) registerHandlers(busTimeout time.Duration, numsAppsWorkspa
 			Methods("POST", "GET", "OPTIONS").
 			Name("blob read")
 	}
-	s.router.HandleFunc(fmt.Sprintf("/api/{%s}/{%s}/{%s:[0-9]+}/{%s:[a-zA-Z0-9_/.]+}", AppOwner, AppName,
-		WSID, ResourceName), corsHandler(RequestHandler(s.bus, busTimeout, numsAppsWorkspaces))).
-		Methods("POST", "PATCH", "OPTIONS").Name("api")
+
+	//TODO POST only for tests
+	s.router.
+		HandleFunc(fmt.Sprintf("/api/v2/{%s}/{%s}/{%s:[0-9]+}/{%s:[a-zA-Z0-9_/.]+}", AppOwner, AppName, WSID, ResourceName), corsHandler(RequestHandler(s.bus, busTimeout, numsAppsWorkspaces))).
+		Methods("GET", "POST").
+		Name("daniil")
+
+	s.router.
+		HandleFunc(fmt.Sprintf("/api/{%s}/{%s}/{%s:[0-9]+}/{%s:[a-zA-Z0-9_/.]+}", AppOwner, AppName, WSID, ResourceName), corsHandler(RequestHandler(s.bus, busTimeout, numsAppsWorkspaces))).
+		Methods("POST", "PATCH", "OPTIONS").
+		Name("api")
 
 	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler())).Methods("GET")
 	s.router.Handle("/n10n/subscribe", corsHandler(s.subscribeHandler())).Methods("GET")

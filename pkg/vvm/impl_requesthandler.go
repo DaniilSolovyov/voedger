@@ -74,16 +74,16 @@ func provideIBus(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
 			return
 		}
 
-		deliverToProcessors(request, requestCtx, appQName, sender, funcQName, procbus, token, cpchIdx, qpcgIdx, cpAmount, partitionID)
+		ad, _ := appParts.AppDef(appQName)
+
+		deliverToProcessors(request, requestCtx, appQName, sender, funcQName, procbus, token, cpchIdx, qpcgIdx, cpAmount, partitionID, ad)
 	})
 }
 
-func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQName appdef.AppQName, sender ibus.ISender, funcQName appdef.QName,
-	procbus iprocbus.IProcBus, token string, cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,
-	cpCount istructs.NumCommandProcessors, partitionID istructs.PartitionID) {
+func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQName appdef.AppQName, sender ibus.ISender, funcQName appdef.QName, procbus iprocbus.IProcBus, token string, cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType, cpCount istructs.NumCommandProcessors, partitionID istructs.PartitionID, ad appdef.IAppDef) {
 	switch request.Resource[:1] {
 	case "q":
-		iqm := queryprocessor.NewQueryMessage(requestCtx, appQName, istructs.PartitionID(request.PartitionNumber), istructs.WSID(request.WSID), sender, request.Body, funcQName, request.Host, token)
+		iqm := queryprocessor.NewQueryMessage(requestCtx, appQName, istructs.PartitionID(request.PartitionNumber), istructs.WSID(request.WSID), sender, request.Body, funcQName, request.Host, token, nil, false)
 		if !procbus.Submit(int(qpcgIdx), 0, iqm) {
 			coreutils.ReplyErrf(sender, http.StatusServiceUnavailable, "no query processors available")
 		}
@@ -95,6 +95,14 @@ func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQN
 			coreutils.ReplyErrf(sender, http.StatusServiceUnavailable, fmt.Sprintf("command processor of partition %d is busy", partitionID))
 		}
 	default:
+		if ad.View(appdef.MustParseQName(request.Resource)) != nil {
+			iqm := queryprocessor.NewQueryMessage(requestCtx, appQName, istructs.PartitionID(request.PartitionNumber), istructs.WSID(request.WSID), sender, request.Body, appdef.MustParseQName(request.Resource), request.Host, token, request.Query, true)
+			if !procbus.Submit(int(qpcgIdx), 0, iqm) {
+				coreutils.ReplyErrf(sender, http.StatusServiceUnavailable, "no query processors available")
+			}
+			return
+		}
+		//TODO change message
 		coreutils.ReplyBadRequest(sender, fmt.Sprintf(`wrong function mark "%s" for function %s`, request.Resource[:1], funcQName))
 	}
 }

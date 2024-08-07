@@ -17,9 +17,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/voedger/voedger/pkg/processors/query2"
+
+	"github.com/voedger/voedger/pkg/goutils/iterate"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/goutils/iterate"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/isecrets"
@@ -122,9 +125,11 @@ func implServiceFactory(serviceChannel iprocbus.ServiceChannel, resultSenderClos
 						p.Close()
 						p = nil
 					} else {
-						if err = execQuery(ctx, qwork); err == nil {
-							if err = processors.CheckResponseIntent(qwork.state); err == nil {
-								err = qwork.state.ApplyIntents()
+						if !qwork.msg.IsV2() {
+							if err = execQuery(ctx, qwork); err == nil {
+								if err = processors.CheckResponseIntent(qwork.state); err == nil {
+									err = qwork.state.ApplyIntents()
+								}
 							}
 						}
 					}
@@ -157,9 +162,8 @@ func execQuery(ctx context.Context, qw *queryWork) (err error) {
 	return qw.appPart.Invoke(ctx, qw.msg.QName(), qw.state, qw.state)
 }
 
-func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer,
-	itokens itokens.ITokens, federation federation.IFederation, statelessResources istructsmem.IStatelessResources) pipeline.ISyncPipeline {
-	ops := []*pipeline.WiredOperator{
+func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer, itokens itokens.ITokens, federation federation.IFederation, statelessResources istructsmem.IStatelessResources) pipeline.ISyncPipeline {
+	return pipeline.NewSyncPipeline(requestCtx, "Query Processor",
 		operator("borrowAppPart", borrowAppPart),
 		operator("check function call rate", func(ctx context.Context, qw *queryWork) (err error) {
 			if qw.appStructs.IsFunctionRateLimitsExceeded(qw.msg.QName(), qw.msg.WSID()) {
@@ -211,160 +215,191 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				return nil
 			}
 			if qw.iWorkspace = qw.appStructs.AppDef().WorkspaceByDescriptor(qw.wsDesc.AsQName(authnz.Field_WSKind)); qw.iWorkspace == nil {
-				return coreutils.NewHTTPErrorf(http.StatusInternalServerError, fmt.Sprintf("workspace is not found in AppDef by cdoc.sys.WorkspaceDescriptor.WSKind %s",
-					qw.wsDesc.AsQName(authnz.Field_WSKind)))
+				return coreutils.NewHTTPErrorf(http.StatusInternalServerError, fmt.Sprintf("workspace is not found in AppDef by cdoc.sys.WorkspaceDescriptor.WSKind %s", qw.wsDesc.AsQName(authnz.Field_WSKind)))
 			}
 			return nil
 		}),
-		operator("get IQuery", func(ctx context.Context, qw *queryWork) (err error) {
-			queryType := qw.iWorkspace.Type(qw.msg.QName())
-			if queryType.Kind() == appdef.TypeKind_null {
-				return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("query %s does not exist in workspace %s", qw.msg.QName(), qw.iWorkspace.QName()))
-			}
-			ok := false
-			if qw.iQuery, ok = queryType.(appdef.IQuery); !ok {
-				return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("%s is not a query", qw.msg.QName()))
-			}
-			return nil
-		}),
-
-		operator("authorize query request", func(ctx context.Context, qw *queryWork) (err error) {
-			req := iauthnz.AuthzRequest{
-				OperationKind: iauthnz.OperationKind_EXECUTE,
-				Resource:      qw.msg.QName(),
-			}
-			ok, err := authz.Authorize(qw.appStructs, qw.principals, req)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return coreutils.WrapSysError(errors.New(""), http.StatusForbidden)
-			}
-			return nil
-		}),
-		operator("unmarshal request", func(ctx context.Context, qw *queryWork) (err error) {
-			parsType := qw.iQuery.Param()
-			if parsType != nil && parsType.QName() == istructs.QNameRaw {
-				qw.requestData["args"] = map[string]interface{}{
-					processors.Field_RawObject_Body: string(qw.msg.Body()),
-				}
-				return nil
-			}
-			err = json.Unmarshal(qw.msg.Body(), &qw.requestData)
-			return coreutils.WrapSysError(err, http.StatusBadRequest)
-		}),
-		operator("validate: get exec query args", func(ctx context.Context, qw *queryWork) (err error) {
-			qw.execQueryArgs, err = newExecQueryArgs(qw.requestData, qw.msg.WSID(), qw)
-			return coreutils.WrapSysError(err, http.StatusBadRequest)
-		}),
-		operator("create callback func", func(ctx context.Context, qw *queryWork) (err error) {
-			qw.callbackFunc = func(object istructs.IObject) error {
-				pathToIdx := make(map[string]int)
-				if qw.resultType.QName() == istructs.QNameRaw {
-					pathToIdx[processors.Field_RawObject_Body] = 0
-				} else {
-					for i, element := range qw.queryParams.Elements() {
-						pathToIdx[element.Path().Name()] = i
+		pipeline.WireSyncOperator("switch", pipeline.SwitchOperator(logic{},
+			pipeline.SwitchBranch("v1", pipeline.NewSyncPipeline(requestCtx, "v1",
+				operator("get IQuery", func(ctx context.Context, qw *queryWork) (err error) {
+					queryType := qw.iWorkspace.Type(qw.msg.QName())
+					if queryType.Kind() == appdef.TypeKind_null {
+						return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("query %s does not exist in workspace %s", qw.msg.QName(), qw.iWorkspace.QName()))
 					}
-				}
-				return qw.rowsProcessor.SendAsync(rowsWorkpiece{
-					object: object,
-					outputRow: &outputRow{
-						keyToIdx: pathToIdx,
-						values:   make([]interface{}, len(pathToIdx)),
-					},
-					enrichedRootFieldsKinds: make(map[string]appdef.DataKind),
-				})
-			}
-			return nil
-		}),
-		operator("create state", func(ctx context.Context, qw *queryWork) (err error) {
-			qw.state = state.ProvideQueryProcessorStateFactory()(
-				qw.msg.RequestCtx(),
-				func() istructs.IAppStructs { return qw.appStructs },
-				state.SimplePartitionIDFunc(qw.msg.Partition()),
-				state.SimpleWSIDFunc(qw.msg.WSID()),
-				qw.secretReader,
-				func() []iauthnz.Principal { return qw.principals },
-				func() string { return qw.msg.Token() },
-				itokens,
-				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },
-				func() istructs.IObject { return qw.execQueryArgs.ArgumentObject },
-				func() istructs.IObjectBuilder {
-					return qw.appStructs.ObjectBuilder(qw.resultType.QName())
-				},
-				federation,
-				func() istructs.ExecQueryCallback {
-					return qw.callbackFunc
-				},
-			)
-			qw.execQueryArgs.State = qw.state
-			qw.execQueryArgs.Intents = qw.state
-			return
-		}),
-		operator("get queryFunc", func(ctx context.Context, qw *queryWork) (err error) {
-			iResource := qw.appStructs.Resources().QueryResource(qw.msg.QName())
-			if iResource.Kind() != istructs.ResourceKind_null {
-				qw.queryFunc = iResource.(istructs.IQueryFunction)
-			} else {
-				_, _, qw.queryFunc = iterate.FindFirstMap(statelessResources.Queries, func(path string, qry istructs.IQueryFunction) bool {
-					return qry.QName() == qw.msg.QName()
-				})
-			}
+					ok := false
+					if qw.iQuery, ok = queryType.(appdef.IQuery); !ok {
+						return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("%s is not a query", qw.msg.QName()))
+					}
+					return nil
+				}),
+				operator("authorize query request", func(ctx context.Context, qw *queryWork) (err error) {
+					req := iauthnz.AuthzRequest{
+						OperationKind: iauthnz.OperationKind_EXECUTE,
+						Resource:      qw.msg.QName(),
+					}
+					ok, err := authz.Authorize(qw.appStructs, qw.principals, req)
+					if err != nil {
+						return err
+					}
+					if !ok {
+						return coreutils.WrapSysError(errors.New(""), http.StatusForbidden)
+					}
+					return nil
+				}),
+				operator("unmarshal request", func(ctx context.Context, qw *queryWork) (err error) {
+					parsType := qw.iQuery.Param()
+					if parsType != nil && parsType.QName() == istructs.QNameRaw {
+						qw.requestData["args"] = map[string]interface{}{
+							processors.Field_RawObject_Body: string(qw.msg.Body()),
+						}
+						return nil
+					}
+					err = json.Unmarshal(qw.msg.Body(), &qw.requestData)
+					return coreutils.WrapSysError(err, http.StatusBadRequest)
+				}),
+				operator("validate: get exec query args", func(ctx context.Context, qw *queryWork) (err error) {
+					qw.execQueryArgs, err = newExecQueryArgs(qw.requestData, qw.msg.WSID(), qw)
+					return coreutils.WrapSysError(err, http.StatusBadRequest)
+				}),
+				operator("create callback func", func(ctx context.Context, qw *queryWork) (err error) {
+					qw.callbackFunc = func(object istructs.IObject) error {
+						pathToIdx := make(map[string]int)
+						if qw.resultType.QName() == istructs.QNameRaw {
+							pathToIdx[processors.Field_RawObject_Body] = 0
+						} else {
+							for i, element := range qw.queryParams.Elements() {
+								pathToIdx[element.Path().Name()] = i
+							}
+						}
+						return qw.rowsProcessor.SendAsync(rowsWorkpiece{
+							object: object,
+							outputRow: &outputRow{
+								keyToIdx: pathToIdx,
+								values:   make([]interface{}, len(pathToIdx)),
+							},
+							enrichedRootFieldsKinds: make(map[string]appdef.DataKind),
+						})
+					}
+					return nil
+				}),
+				operator("create state", func(ctx context.Context, qw *queryWork) (err error) {
+					qw.state = state.ProvideQueryProcessorStateFactory()(
+						qw.msg.RequestCtx(),
+						func() istructs.IAppStructs { return qw.appStructs },
+						state.SimplePartitionIDFunc(qw.msg.Partition()),
+						state.SimpleWSIDFunc(qw.msg.WSID()),
+						qw.secretReader,
+						func() []iauthnz.Principal { return qw.principals },
+						func() string { return qw.msg.Token() },
+						itokens,
+						func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },
+						func() istructs.IObject { return qw.execQueryArgs.ArgumentObject },
+						func() istructs.IObjectBuilder {
+							return qw.appStructs.ObjectBuilder(qw.resultType.QName())
+						},
+						federation,
+						func() istructs.ExecQueryCallback {
+							return qw.callbackFunc
+						},
+					)
+					qw.execQueryArgs.State = qw.state
+					qw.execQueryArgs.Intents = qw.state
+					return
+				}),
+				operator("get queryFunc", func(ctx context.Context, qw *queryWork) (err error) {
+					iResource := qw.appStructs.Resources().QueryResource(qw.msg.QName())
+					if iResource.Kind() != istructs.ResourceKind_null {
+						qw.queryFunc = iResource.(istructs.IQueryFunction)
+					} else {
+						_, _, qw.queryFunc = iterate.FindFirstMap(statelessResources.Queries, func(path string, qry istructs.IQueryFunction) bool {
+							return qry.QName() == qw.msg.QName()
+						})
+					}
 
-			return nil
-		}),
-		operator("validate: get result type", func(ctx context.Context, qw *queryWork) (err error) {
-			qw.resultType = qw.iQuery.Result()
-			if qw.resultType == nil {
-				return nil
-			}
-			if qw.resultType.QName() == appdef.QNameANY {
-				qNameResultType := qw.queryFunc.ResultType(qw.execQueryArgs.PrepareArgs)
-				qw.resultType = qw.iWorkspace.Type(qNameResultType)
-				if qw.resultType.Kind() == appdef.TypeKind_null {
-					return coreutils.NewHTTPError(http.StatusBadRequest, fmt.Errorf("%s query result type %s does not exist in workspace %s", qw.iQuery.QName(), qNameResultType, qw.iWorkspace.QName()))
-				}
-			}
-			return nil
-		}),
-		operator("validate: get query params", func(ctx context.Context, qw *queryWork) (err error) {
-			qw.queryParams, err = newQueryParams(qw.requestData, NewElement, NewFilter, NewOrderBy, newFieldsKinds(qw.resultType))
-			return coreutils.WrapSysError(err, http.StatusBadRequest)
-		}),
-		operator("authorize result", func(ctx context.Context, qw *queryWork) (err error) {
-			req := iauthnz.AuthzRequest{
-				OperationKind: iauthnz.OperationKind_SELECT,
-				Resource:      qw.msg.QName(),
-			}
-			for _, elem := range qw.queryParams.Elements() {
-				for _, resultField := range elem.ResultFields() {
-					req.Fields = append(req.Fields, resultField.Field())
-				}
-			}
-			if len(req.Fields) == 0 {
-				return nil
-			}
-			ok, err := authz.Authorize(qw.appStructs, qw.principals, req)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return coreutils.NewSysError(http.StatusForbidden)
-			}
-			return nil
-		}),
-		operator("build rows processor", func(ctx context.Context, qw *queryWork) error {
-			now := time.Now()
-			defer func() {
-				qw.metrics.Increase(buildSeconds, time.Since(now).Seconds())
-			}()
-			qw.rowsProcessor = ProvideRowsProcessorFactory()(qw.msg.RequestCtx(), qw.appStructs.AppDef(),
-				qw.state, qw.queryParams, qw.resultType, qw.rs, qw.metrics)
-			return nil
-		}),
+					return nil
+				}),
+				operator("validate: get result type", func(ctx context.Context, qw *queryWork) (err error) {
+					qw.resultType = qw.iQuery.Result()
+					if qw.resultType == nil {
+						return nil
+					}
+					if qw.resultType.QName() == appdef.QNameANY {
+						qNameResultType := qw.queryFunc.ResultType(qw.execQueryArgs.PrepareArgs)
+						qw.resultType = qw.iWorkspace.Type(qNameResultType)
+						if qw.resultType.Kind() == appdef.TypeKind_null {
+							return coreutils.NewHTTPError(http.StatusBadRequest, fmt.Errorf("%s query result type %s does not exist in workspace %s", qw.iQuery.QName(), qNameResultType, qw.iWorkspace.QName()))
+						}
+					}
+					return nil
+				}),
+				operator("validate: get query params", func(ctx context.Context, qw *queryWork) (err error) {
+					qw.queryParams, err = newQueryParams(qw.requestData, NewElement, NewFilter, NewOrderBy, newFieldsKinds(qw.resultType))
+					return coreutils.WrapSysError(err, http.StatusBadRequest)
+				}),
+				operator("authorize result", func(ctx context.Context, qw *queryWork) (err error) {
+					req := iauthnz.AuthzRequest{
+						OperationKind: iauthnz.OperationKind_SELECT,
+						Resource:      qw.msg.QName(),
+					}
+					for _, elem := range qw.queryParams.Elements() {
+						for _, resultField := range elem.ResultFields() {
+							req.Fields = append(req.Fields, resultField.Field())
+						}
+					}
+					if len(req.Fields) == 0 {
+						return nil
+					}
+					ok, err := authz.Authorize(qw.appStructs, qw.principals, req)
+					if err != nil {
+						return err
+					}
+					if !ok {
+						return coreutils.NewSysError(http.StatusForbidden)
+					}
+					return nil
+				}),
+				operator("build rows processor", func(ctx context.Context, qw *queryWork) error {
+					now := time.Now()
+					defer func() {
+						qw.metrics.Increase(buildSeconds, time.Since(now).Seconds())
+					}()
+					qw.rowsProcessor = ProvideRowsProcessorFactory()(qw.msg.RequestCtx(), qw.appStructs.AppDef(), qw.state, qw.queryParams, qw.resultType, qw.rs, qw.metrics)
+					return nil
+				}),
+			)),
+			pipeline.SwitchBranch("v2", pipeline.NewSyncPipeline(requestCtx, "v2",
+				operator("build rows processor", func(ctx context.Context, qw *queryWork) (err error) {
+					qw.rowsProcessor = query2.ProvideRowsProcessorFactory()(qw.msg.RequestCtx(), qw.appStructs.AppDef(), qw.rs, qw.msg.Sender())
+					return nil
+				}),
+				operator("use processor", func(ctx context.Context, qw *queryWork) (err error) {
+					where := make(map[string]interface{})
+					err = json.Unmarshal([]byte(qw.msg.Query()["where"][0]), &where)
+					if err != nil {
+						return
+					}
+					return qw.rowsProcessor.SendAsync(&query2.Qwp{
+						WSID:  qw.msg.WSID(),
+						Name:  qw.msg.QName(),
+						Where: where,
+						VR:    qw.appStructs.ViewRecords(),
+						AD:    qw.appStructs.AppDef(),
+						OO:    make([]map[string]interface{}, 0),
+						BB:    make([]byte, 0),
+					})
+				}),
+			))),
+		),
+	)
+}
+
+type logic struct{}
+
+func (l logic) Switch(work interface{}) (branchName string, err error) {
+	if work.(*queryWork).msg.IsV2() {
+		return "v2", nil
 	}
-	return pipeline.NewSyncPipeline(requestCtx, "Query Processor", ops[0], ops[1:]...)
+	return "v1", nil
 }
 
 type queryWork struct {
@@ -472,6 +507,8 @@ type queryMessage struct {
 	qName      appdef.QName
 	host       string
 	token      string
+	query      map[string][]string
+	v2         bool
 }
 
 func (m queryMessage) AppQName() appdef.AppQName       { return m.appQName }
@@ -488,19 +525,22 @@ func (m queryMessage) Body() []byte {
 	}
 	return []byte("{}")
 }
+func (m queryMessage) Query() map[string][]string { return m.query }
+func (m queryMessage) IsV2() bool                 { return m.v2 }
 
-func NewQueryMessage(requestCtx context.Context, appQName appdef.AppQName, partID istructs.PartitionID, wsid istructs.WSID, sender ibus.ISender, body []byte,
-	qName appdef.QName, host string, token string) IQueryMessage {
+func NewQueryMessage(requestCtx context.Context, appQName appdef.AppQName, partID istructs.PartitionID, wsid istructs.WSID, sender ibus.ISender, body []byte, qName appdef.QName, host string, token string, query map[string][]string, v2 bool) IQueryMessage {
 	return queryMessage{
+		requestCtx: requestCtx,
 		appQName:   appQName,
 		wsid:       wsid,
 		partition:  partID,
 		sender:     sender,
 		body:       body,
-		requestCtx: requestCtx,
 		qName:      qName,
 		host:       host,
 		token:      token,
+		query:      query,
+		v2:         v2,
 	}
 }
 
