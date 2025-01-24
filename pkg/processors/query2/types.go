@@ -4,9 +4,16 @@
  */
 package query2
 
+import (
+	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/istructs"
+)
+
 type QueryParams struct {
 	Constraints *Constraints           `json:"constraints"`
 	Argument    map[string]interface{} `json:"argument,omitempty"`
+	WSID        istructs.WSID
+	Entity      appdef.QName
 }
 
 type Constraints struct {
