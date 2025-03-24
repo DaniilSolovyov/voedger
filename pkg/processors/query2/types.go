@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/voedger/voedger/pkg/sys/collection"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
@@ -314,6 +316,10 @@ func (s *sender) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork p
 	}
 	return work, s.respWriter.Write(work.(objectBackedByMap).data)
 }
+func (s *sender) OnError(_ context.Context, err error) {
+	s.responder.InitResponse(http.StatusBadRequest).Close(err)
+	//_ = s.responder.Respond(bus.ResponseMeta{ContentType: s.contentType, StatusCode: http.StatusBadRequest}, err)
+}
 
 type filter struct {
 	pipeline.AsyncNOOP
@@ -454,18 +460,22 @@ func (w queryResultWrapper) AsQName(name appdef.FieldName) appdef.QName {
 
 type include struct {
 	pipeline.AsyncNOOP
-	sss     [][]string
-	wsid    istructs.WSID
-	records istructs.IRecords
-	ad      appdef.IAppDef
+	sss         [][]string
+	wsid        istructs.WSID
+	ad          appdef.IAppDef
+	records     istructs.IRecords
+	viewRecords istructs.IViewRecords
+	cdoc        bool
 }
 
-func newInclude(qw *queryWork) (o pipeline.IAsyncOperator) {
+func newInclude(qw *queryWork, cdoc bool) (o pipeline.IAsyncOperator) {
 	i := &include{
-		sss:     make([][]string, 0),
-		records: qw.appStructs.Records(),
-		wsid:    qw.msg.WSID(),
-		ad:      qw.appStructs.AppDef(),
+		sss:         make([][]string, 0),
+		wsid:        qw.msg.WSID(),
+		ad:          qw.appStructs.AppDef(),
+		records:     qw.appStructs.Records(),
+		viewRecords: qw.appStructs.ViewRecords(),
+		cdoc:        cdoc,
 	}
 	for _, s := range qw.queryParams.Constraints.Include {
 		i.sss = append(i.sss, strings.Split(s, "."))
@@ -473,9 +483,13 @@ func newInclude(qw *queryWork) (o pipeline.IAsyncOperator) {
 	return i
 }
 
-func (i include) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+func (i include) DoAsync(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+	relations, err := i.getRelations(ctx, work)
+	if err != nil {
+		return
+	}
 	for _, ss := range i.sss {
-		err = i.fill(work.(objectBackedByMap).data, ss)
+		err = i.fill(work.(objectBackedByMap).data, ss, relations)
 		if err != nil {
 			return
 		}
@@ -489,10 +503,20 @@ func (i include) recordToMap(id istructs.RecordID) (obj map[string]interface{}, 
 	}
 	return coreutils.FieldsToMap(record, i.ad), nil
 }
-func (i include) fill(parent map[string]interface{}, ss []string) (err error) {
+func (i include) fill(parent map[string]interface{}, ss []string, relations map[istructs.RecordID]map[string][]istructs.RecordID) (err error) {
 	if len(ss) == 0 {
 		return nil
 	}
+
+	//if id, ok := parent[appdef.SystemField_ID].(istructs.RecordID); ok {
+	//	for container, ids := range relations[id] {
+	//		if container != ss[0] {
+	//			continue
+	//		}
+	//		parent[container] = ids
+	//	}
+	//}
+
 	switch v := parent[ss[0]].(type) {
 	case istructs.RecordID:
 		child, e := i.recordToMap(v)
@@ -500,17 +524,66 @@ func (i include) fill(parent map[string]interface{}, ss []string) (err error) {
 			return e
 		}
 		parent[ss[0]] = child
-		e = i.fill(child, ss[1:])
+		e = i.fill(child, ss[1:], relations)
 		if e != nil {
 			return e
 		}
 	case map[string]interface{}:
-		e := i.fill(v, ss[1:])
+		e := i.fill(v, ss[1:], relations)
 		if e != nil {
 			return e
 		}
+	case []istructs.RecordID:
+		items := make([]map[string]interface{}, 0)
+		for _, id := range v {
+			item, e := i.recordToMap(id)
+			if e != nil {
+				return e
+			}
+			e = i.fill(item, ss[1:], relations)
+			if e != nil {
+				return e
+			}
+			items = append(items, item)
+		}
+		parent[ss[0]] = items
+	case nil:
+		// TODO
+		return errUnexpectedField
+		// Do nothing
 	default:
 		return errUnsupportedType
 	}
+	return
+}
+func (i include) getRelations(ctx context.Context, work pipeline.IWorkpiece) (relations map[istructs.RecordID]map[string][]istructs.RecordID, err error) {
+	relations = make(map[istructs.RecordID]map[string][]istructs.RecordID)
+	if !i.cdoc {
+		return
+	}
+	kbCollectionView := i.viewRecords.KeyBuilder(collection.QNameCollectionView)
+	kbCollectionView.PutInt32(collection.Field_PartKey, collection.PartitionKeyCollection)
+	kbCollectionView.PutQName(collection.Field_DocQName, work.(objectBackedByMap).data[appdef.SystemField_QName].(appdef.QName))
+	kbCollectionView.PutRecordID(collection.Field_DocID, work.(objectBackedByMap).data[appdef.SystemField_ID].(istructs.RecordID))
+	err = i.viewRecords.Read(ctx, i.wsid, kbCollectionView, func(key istructs.IKey, value istructs.IValue) (err error) {
+		record := value.AsRecord(collection.Field_Record)
+		if record.AsRecordID(appdef.SystemField_ParentID) == istructs.NullRecordID {
+			return
+		}
+
+		containers, okContainers := relations[record.AsRecordID(appdef.SystemField_ParentID)]
+		if !okContainers {
+			containers = make(map[string][]istructs.RecordID)
+		}
+		container, okContainer := containers[record.AsString(appdef.SystemField_Container)]
+		if !okContainer {
+			container = make([]istructs.RecordID, 0)
+		}
+		container = append(container, record.ID())
+
+		containers[record.AsString(appdef.SystemField_Container)] = container
+		relations[record.AsRecordID(appdef.SystemField_ParentID)] = containers
+		return
+	})
 	return
 }

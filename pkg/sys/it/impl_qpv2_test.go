@@ -338,7 +338,7 @@ func TestQueryProcessor2_Queries(t *testing.T) {
 	})
 
 }
-func TestQueryProcessor2_IncludeView(t *testing.T) {
+func TestQueryProcessor2_Include(t *testing.T) {
 	require := require.New(t)
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
 	defer vit.TearDown()
@@ -444,6 +444,221 @@ func TestQueryProcessor2_IncludeView(t *testing.T) {
 	require.EqualValues(offset, <-offsetsChan)
 	unsubscribe()
 
+	cuds = coreutils.CUDs{
+		Values: []coreutils.CUD{
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:    istructs.RecordID(1),
+					appdef.SystemField_QName: it.QNameApp1_CDocCfg,
+					it.Field_Name:            "A",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:    istructs.RecordID(2),
+					appdef.SystemField_QName: it.QNameApp1_CDocCfg,
+					it.Field_Name:            "B",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:    istructs.RecordID(3),
+					appdef.SystemField_QName: it.QNameApp1_CDocCfg,
+					it.Field_Name:            "Batch",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:    istructs.RecordID(4),
+					appdef.SystemField_QName: it.QNameApp1_CDocBatch,
+					it.Field_Number:          101,
+					it.Field_Cfg:             istructs.RecordID(3),
+				},
+			},
+		},
+	}
+	resp := vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON())
+
+	cfgAID := resp.NewIDs["1"]
+	cfgBID := resp.NewIDs["2"]
+	batchID := resp.NewIDs["4"]
+
+	cuds = coreutils.CUDs{
+		Values: []coreutils.CUD{
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(1),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  batchID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "TaskA1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(2),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  batchID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "TaskA2",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(3),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  batchID,
+					appdef.SystemField_Container: it.Field_GroupB,
+					it.Field_Cfg:                 cfgBID,
+					it.Field_Name:                "TaskB1",
+				},
+			},
+		},
+	}
+	resp = vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON())
+
+	taskA1ID := resp.NewIDs["1"]
+	taskA2ID := resp.NewIDs["2"]
+	taskB1ID := resp.NewIDs["3"]
+
+	cuds = coreutils.CUDs{
+		Values: []coreutils.CUD{
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(1),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  taskA1ID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "SubTaskA1_TaskA1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(2),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  taskA1ID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "SubTaskA2_TaskA1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(3),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  taskA1ID,
+					appdef.SystemField_Container: it.Field_GroupB,
+					it.Field_Cfg:                 cfgBID,
+					it.Field_Name:                "SubTaskB1_TaskA1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(4),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  taskA1ID,
+					appdef.SystemField_Container: it.Field_GroupB,
+					it.Field_Cfg:                 cfgBID,
+					it.Field_Name:                "SubTaskB2_TaskA1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(5),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  taskA2ID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "SubTaskA1_TaskA2",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(6),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  taskB1ID,
+					appdef.SystemField_Container: it.Field_GroupB,
+					it.Field_Cfg:                 cfgBID,
+					it.Field_Name:                "SubTaskB1_TaskB1",
+				},
+			},
+		},
+	}
+	subTaskB1TaskB1ID := vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON()).NewIDs["6"]
+	cuds = coreutils.CUDs{
+		Values: []coreutils.CUD{
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(1),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  subTaskB1TaskB1ID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "SubSubTaskA1_SubTaskB1_TaskB1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(2),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  subTaskB1TaskB1ID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "SubSubTaskA2_SubTaskB1_TaskB1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(3),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  subTaskB1TaskB1ID,
+					appdef.SystemField_Container: it.Field_GroupB,
+					it.Field_Cfg:                 cfgBID,
+					it.Field_Name:                "SubSubTaskB1_SubTaskB1_TaskB1",
+				},
+			},
+		},
+	}
+	subSubTaskB1SubTaskB1TaskB1ID := vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON()).NewIDs["3"]
+	cuds = coreutils.CUDs{
+		Values: []coreutils.CUD{
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(1),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  subSubTaskB1SubTaskB1TaskB1ID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "SubSubSubTaskA1_SubSubTaskB1_SubTaskB1_TaskB1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(2),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  subSubTaskB1SubTaskB1TaskB1ID,
+					appdef.SystemField_Container: it.Field_GroupA,
+					it.Field_Cfg:                 cfgAID,
+					it.Field_Name:                "SubSubSubTaskA2_SubSubTaskB1_SubTaskB1_TaskB1",
+				},
+			},
+			{
+				Fields: map[string]interface{}{
+					appdef.SystemField_ID:        istructs.RecordID(3),
+					appdef.SystemField_QName:     it.QNameApp1_CRecordTask,
+					appdef.SystemField_ParentID:  subSubTaskB1SubTaskB1TaskB1ID,
+					appdef.SystemField_Container: it.Field_GroupB,
+					it.Field_Cfg:                 cfgBID,
+					it.Field_Name:                "SubSubSubTaskB1_SubSubTaskB1_SubTaskB1_TaskB1",
+				},
+			},
+		},
+	}
+	vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON())
+
 	t.Run("Read by PK and include all", func(t *testing.T) {
 		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/users/test1/apps/app1/workspaces/%d/views/%s?where={"Year":{"$in":[1988]},"Month":{"$in":[1]}}&include=Client.Wallet.Currency,Client.Country,Client.Wallet.Capabilities`, ws.WSID, it.QNameApp1_ViewClients), coreutils.WithAuthorizeBy(ws.Owner.Token))
 		require.NoError(err)
@@ -488,6 +703,11 @@ func TestQueryProcessor2_IncludeView(t *testing.T) {
 					"offs":13,
 					"sys.QName":"app1pkg.Clients"
 		}]}`, resp.Body)
+	})
+	t.Run("Read by ID and include all", func(t *testing.T) {
+		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/users/test1/apps/app1/workspaces/%d/docs/%s/%d?include=GroupB,GroupB.GroupB,GroupB.GroupB.GroupB,GroupB.GroupB.GroupB.GroupA,GroupB.GroupB.GroupB.GroupB`, ws.WSID, it.QNameApp1_CDocBatch, batchID), coreutils.WithAuthorizeBy(ws.Owner.Token))
+		require.NoError(err)
+		resp.Println()
 	})
 }
 

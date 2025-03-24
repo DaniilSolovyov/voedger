@@ -7,6 +7,7 @@ package query2
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"time"
 
@@ -118,7 +119,7 @@ func (h *docsHandler) AuthorizeResult(ctx context.Context, qw *queryWork) (err e
 func (h *docsHandler) RowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	oo := make([]*pipeline.WiredOperator, 0)
 	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Include) != 0 {
-		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw)))
+		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, true)))
 	}
 	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
@@ -132,7 +133,7 @@ func (h *docsHandler) RowsProcessor(ctx context.Context, qw *queryWork) (err err
 	return
 }
 
-func (h *docsHandler) Exec(ctx context.Context, qw *queryWork) (err error) {
+func (h *docsHandler) Exec(_ context.Context, qw *queryWork) (err error) {
 	now := time.Now()
 	defer func() {
 		qw.metrics.Increase(queryprocessor.Metric_ExecSeconds, time.Since(now).Seconds())
@@ -161,6 +162,13 @@ func (h *docsHandler) Exec(ctx context.Context, qw *queryWork) (err error) {
 				return coreutils.NewHTTPErrorf(http.StatusNotFound, fmt.Errorf("document %s with ID %d not found", qw.msg.QName(), qw.msg.DocID()))
 			}
 			return coreutils.NewHTTPErrorf(http.StatusNotFound, fmt.Errorf("record %s with ID %d not found", qw.msg.QName(), qw.msg.DocID()))
+		}
+	}
+
+	for _, container := range qw.appStructs.AppDef().Type(rec.QName()).(appdef.IWithContainers).Containers() {
+		log.Println(container)
+		for _, c2 := range qw.appStructs.AppDef().Type(container.QName()).(appdef.IWithContainers).Containers() {
+			log.Println("   ", c2)
 		}
 	}
 
