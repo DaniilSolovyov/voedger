@@ -301,10 +301,11 @@ func (a *aggregator) compareUint64(v1, v2 uint64, asc bool) bool {
 
 type sender struct {
 	pipeline.AsyncNOOP
-	responder       bus.IResponder
-	respWriter      bus.IResponseWriter
-	isArrayResponse bool
-	contentType     string
+	responder          bus.IResponder
+	respWriter         bus.IResponseWriter
+	isArrayResponse    bool
+	contentType        string
+	rowsProcessorErrCh chan error
 }
 
 func (s *sender) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
@@ -317,7 +318,7 @@ func (s *sender) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork p
 	return work, s.respWriter.Write(work.(objectBackedByMap).data)
 }
 func (s *sender) OnError(_ context.Context, err error) {
-	s.responder.InitResponse(http.StatusBadRequest).Close(err)
+	s.rowsProcessorErrCh <- coreutils.WrapSysError(err, http.StatusBadRequest)
 	//_ = s.responder.Respond(bus.ResponseMeta{ContentType: s.contentType, StatusCode: http.StatusBadRequest}, err)
 }
 

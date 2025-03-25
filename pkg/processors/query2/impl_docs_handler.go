@@ -124,7 +124,12 @@ func (h *docsHandler) RowsProcessor(ctx context.Context, qw *queryWork) (err err
 	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
-	sender := &sender{responder: qw.msg.Responder(), isArrayResponse: false, contentType: coreutils.ApplicationJSON}
+	sender := &sender{
+		responder:          qw.msg.Responder(),
+		isArrayResponse:    false,
+		contentType:        coreutils.ApplicationJSON,
+		rowsProcessorErrCh: qw.rowsProcessorErrCh,
+	}
 	oo = append(oo, pipeline.WireAsyncOperator("Sender", sender))
 	qw.rowsProcessor = pipeline.NewAsyncPipeline(ctx, "View rows processor", oo[0], oo[1:]...)
 	qw.responseWriterGetter = func() bus.IResponseWriter {
