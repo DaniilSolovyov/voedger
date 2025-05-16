@@ -86,10 +86,10 @@ func docsAuthorizeResult(ctx context.Context, qw *queryWork) (err error) {
 }
 func docsRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	oo := make([]*pipeline.WiredOperator, 0)
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Include) != 0 {
+	if qw.queryParams.hasInclude() {
 		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, true)))
 	}
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
+	if qw.queryParams.hasKeys() {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
 	sender := &sender{

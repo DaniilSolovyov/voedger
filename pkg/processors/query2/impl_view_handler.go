@@ -74,7 +74,7 @@ func viewRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 		return
 	}
 	oo := make([]*pipeline.WiredOperator, 0)
-	if len(qw.queryParams.Constraints.Include) != 0 {
+	if qw.queryParams.hasInclude() {
 		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, false)))
 	}
 	if len(qw.queryParams.Constraints.Order) != 0 || qw.queryParams.Constraints.Skip > 0 || qw.queryParams.Constraints.Limit > 0 {
@@ -90,7 +90,7 @@ func viewRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	if o != nil {
 		oo = append(oo, pipeline.WireAsyncOperator("Filter", o))
 	}
-	if len(qw.queryParams.Constraints.Keys) != 0 {
+	if qw.queryParams.hasKeys() {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
 	sender := &sender{responder: qw.msg.Responder(), isArrayResponse: true}

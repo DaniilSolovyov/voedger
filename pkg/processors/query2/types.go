@@ -29,6 +29,13 @@ type QueryParams struct {
 	Argument    map[string]interface{}
 }
 
+func (p QueryParams) hasInclude() (ok bool) {
+	return p.Constraints != nil && len(p.Constraints.Include) != 0
+}
+func (p QueryParams) hasKeys() (ok bool) {
+	return p.Constraints != nil && len(p.Constraints.Keys) != 0
+}
+
 type Constraints struct {
 	Order   []string
 	Limit   int
