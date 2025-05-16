@@ -44,14 +44,14 @@ func docsSetRequestType(ctx context.Context, qw *queryWork) error {
 	}
 	return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("document or record %s is not defined in %v", qw.msg.QName(), qw.iWorkspace))
 }
-func docsSetResultType(ctx context.Context, qw *queryWork, statelessResources istructsmem.IStatelessResources) error {
+func docsSetResultType(_ context.Context, qw *queryWork, _ istructsmem.IStatelessResources) error {
 	qw.resultType = qw.iDoc
 	if qw.resultType == nil {
 		qw.resultType = qw.iRecord
 	}
 	return nil
 }
-func docsAuthorizeResult(ctx context.Context, qw *queryWork) (err error) {
+func docsAuthorizeResult(_ context.Context, qw *queryWork) (err error) {
 	ws := qw.iWorkspace
 	if ws == nil {
 		return errWorkspaceIsNil
@@ -70,25 +70,33 @@ func docsAuthorizeResult(ctx context.Context, qw *queryWork) (err error) {
 			requestedFields = append(requestedFields, field.Name())
 		}
 	}
-	// TODO: what to do with included objects?
-	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
-	if !ok {
-		if ok, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
-			return err
+
+	fieldsPerType, err := getFieldsPerType(qw)
+	if err != nil {
+		return
+	}
+	fieldsPerType[qw.resultType.QName()] = requestedFields
+
+	for qName, fields := range fieldsPerType {
+		// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
+		ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qName, fields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
+		if !ok {
+			if ok, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qName, fields, qw.roles); err != nil {
+				return err
+			}
+		}
+		if !ok {
+			return coreutils.NewSysError(http.StatusForbidden)
 		}
 	}
-	if !ok {
-		return coreutils.NewSysError(http.StatusForbidden)
-	}
-	return nil
+	return
 }
 func docsRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	oo := make([]*pipeline.WiredOperator, 0)
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Include) != 0 {
+	if qw.queryParams.hasInclude() {
 		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, true)))
 	}
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
+	if qw.queryParams.hasKeys() {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
 	sender := qw.getObjectSender()

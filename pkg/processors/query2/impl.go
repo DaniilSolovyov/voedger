@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -332,4 +333,32 @@ func combine(arrays [][]interface{}, index int) [][]interface{} {
 		}
 	}
 	return result
+}
+
+func getFieldsPerType(qw *queryWork) (fieldsPerType map[appdef.QName][]string, err error) {
+	fieldsPerType = make(map[appdef.QName][]string)
+	if !qw.queryParams.hasInclude() {
+		return
+	}
+	current := qw.resultType.QName()
+	for _, path := range qw.queryParams.Constraints.Include {
+		for _, element := range strings.Split(path, ".") {
+			if withFields, ok := qw.appStructs.AppDef().Type(current).(appdef.IWithFields); ok {
+				withFields.RefFields()
+			}
+
+		}
+
+		//refFieldsAndContainers = append(refFieldsAndContainers, strings.Split(s, "."))
+	}
+	//refFieldsAndContainers := make([][]string, 0)
+	//for _, s := range qw.queryParams.Constraints.Include {
+	//	refFieldsAndContainers = append(refFieldsAndContainers, strings.Split(s, "."))
+	//}
+	//
+	//checkField := func(parent appdef.QName, refFieldOrContainer string, refFieldOrContainerExpression []string) (err error) {
+	//
+	//}
+
+	return
 }

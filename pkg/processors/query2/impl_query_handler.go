@@ -66,7 +66,7 @@ func queryRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 		return nil
 	}
 	oo := make([]*pipeline.WiredOperator, 0)
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Include) != 0 {
+	if qw.queryParams.hasInclude() {
 		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, false)))
 	}
 	if qw.queryParams.Constraints != nil && (len(qw.queryParams.Constraints.Order) != 0 || qw.queryParams.Constraints.Skip > 0 || qw.queryParams.Constraints.Limit > 0) {
@@ -80,7 +80,7 @@ func queryRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	if o != nil {
 		oo = append(oo, pipeline.WireAsyncOperator("Filter", o))
 	}
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
+	if qw.queryParams.hasKeys() {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
 	sender, respWriterGetter := qw.getArraySender()

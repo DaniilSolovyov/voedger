@@ -9,6 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/voedger/voedger/pkg/appparts"
+	"github.com/voedger/voedger/pkg/iauthnz"
+	"github.com/voedger/voedger/pkg/processors/oldacl"
 	"iter"
 	"net/http"
 	"sort"
@@ -27,6 +30,13 @@ import (
 type QueryParams struct {
 	Constraints *Constraints
 	Argument    map[string]interface{}
+}
+
+func (p QueryParams) hasInclude() (ok bool) {
+	return p.Constraints != nil && len(p.Constraints.Include) != 0
+}
+func (p QueryParams) hasKeys() (ok bool) {
+	return p.Constraints != nil && len(p.Constraints.Keys) != 0
 }
 
 type Constraints struct {
@@ -643,4 +653,49 @@ func (i include) checkField(parent map[string]interface{}, refFieldOrContainer s
 		}
 	}
 	return fmt.Errorf("field expression - '%s', '%s' - %w", strings.Join(refFieldOrContainerExpression, "."), refFieldOrContainer, errUnexpectedField)
+}
+
+type includeACL struct {
+	ad                     appdef.IAppDef
+	ws                     appdef.IWorkspace
+	roles                  []appdef.QName
+	principals             []iauthnz.Principal
+	wsid                   istructs.WSID
+	appPart                appparts.IAppPartition
+	refFieldsAndContainers [][]string
+}
+
+func newIncludeACL(qw *queryWork) (i includeACL) {
+	i = includeACL{
+		ad:         qw.appStructs.AppDef(),
+		ws:         qw.iWorkspace,
+		roles:      qw.roles,
+		principals: qw.principals,
+		wsid:       qw.msg.WSID(),
+		appPart:    qw.appPart,
+	}
+	for _, s := range qw.queryParams.Constraints.Include {
+		i.refFieldsAndContainers = append(i.refFieldsAndContainers, strings.Split(s, "."))
+	}
+	return i
+}
+
+func (i includeACL) isAllowed() (err error) {
+	return
+}
+
+func (i includeACL) isAllowedByQName(name appdef.QName, fields []string) (err error) {
+	ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, name, fields, oldacl.EnrichPrincipals(i.principals, i.wsid))
+	if !ok {
+		if ok, err = i.appPart.IsOperationAllowed(i.ws, appdef.OperationKind_Select, name, fields, i.roles); err != nil {
+			return err
+		}
+	}
+	if !ok {
+		return coreutils.NewSysError(http.StatusForbidden)
+	}
+	return
+}
+func (i includeACL)  {
+
 }
