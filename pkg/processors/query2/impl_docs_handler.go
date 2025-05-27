@@ -14,7 +14,6 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/pipeline"
-	"github.com/voedger/voedger/pkg/processors/oldacl"
 )
 
 // [~server.apiv2.docs/cmp.docsHandler~impl]
@@ -50,51 +49,22 @@ func docsSetRequestType(ctx context.Context, qw *queryWork) error {
 	}
 	return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("document or record %s is not defined in %v", qw.msg.QName(), qw.iWorkspace))
 }
-func docsSetResultType(ctx context.Context, qw *queryWork, statelessResources istructsmem.IStatelessResources) error {
+func docsSetResultType(_ context.Context, qw *queryWork, _ istructsmem.IStatelessResources) error {
 	qw.resultType = qw.iDoc
 	if qw.resultType == nil {
 		qw.resultType = qw.iRecord
 	}
 	return nil
 }
-func docsAuthorizeResult(ctx context.Context, qw *queryWork) (err error) {
-	ws := qw.iWorkspace
-	if ws == nil {
-		return errWorkspaceIsNil
-	}
-	var requestedFields []string
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
-		requestedFields = qw.queryParams.Constraints.Keys
-	} else {
-		var structure appdef.IStructure
-		if qw.iDoc != nil {
-			structure = qw.iDoc
-		} else {
-			structure = qw.iRecord
-		}
-		for _, field := range structure.Fields() {
-			requestedFields = append(requestedFields, field.Name())
-		}
-	}
-	// TODO: what to do with included objects?
-	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
-	if !ok {
-		if ok, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
-			return err
-		}
-	}
-	if !ok {
-		return coreutils.NewSysError(http.StatusForbidden)
-	}
-	return nil
+func docsAuthorizeResult(_ context.Context, qw *queryWork) (err error) {
+	return applyACL(qw)
 }
 func docsRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	oo := make([]*pipeline.WiredOperator, 0)
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Include) != 0 {
+	if qw.queryParams.hasInclude() {
 		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, true)))
 	}
-	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
+	if qw.queryParams.hasKeys() {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
 	sender := qw.getObjectSender()

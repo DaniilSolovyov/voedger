@@ -14,7 +14,6 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/pipeline"
-	"github.com/voedger/voedger/pkg/processors/oldacl"
 )
 
 func viewHandler() apiPathHandler {
@@ -30,42 +29,18 @@ func viewHandler() apiPathHandler {
 	}
 }
 
-func viewSetRequestType(ctx context.Context, qw *queryWork) error {
+func viewSetRequestType(_ context.Context, qw *queryWork) (err error) {
 	if qw.iView = appdef.View(qw.iWorkspace.Type, qw.msg.QName()); qw.iView == nil {
 		return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("view %s does not exist in %v", qw.msg.QName(), qw.iWorkspace))
 	}
-	return nil
+	return
 }
-func viewSetResultType(ctx context.Context, qw *queryWork, statelessResources istructsmem.IStatelessResources) error {
+func viewSetResultType(_ context.Context, qw *queryWork, _ istructsmem.IStatelessResources) (err error) {
 	qw.resultType = qw.iView
-	return nil
+	return
 }
-func viewAuthorizeResult(ctx context.Context, qw *queryWork) (err error) {
-	if qw.resultType != appdef.AnyType {
-		// will authorize result only if result is sys.Any
-		// otherwise each field is considered as allowed if EXECUTE ON QUERY is allowed
-		return nil
-	}
-	ws := qw.iWorkspace
-	var requestedFields []string
-	if len(qw.queryParams.Constraints.Keys) != 0 {
-		requestedFields = qw.queryParams.Constraints.Keys
-	} else {
-		for _, field := range qw.appStructs.AppDef().Type(qw.iView.QName()).(appdef.IView).Key().Fields() {
-			requestedFields = append(requestedFields, field.Name())
-		}
-	}
-	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
-	if !ok {
-		if ok, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
-			return err
-		}
-	}
-	if !ok {
-		return coreutils.NewSysError(http.StatusForbidden)
-	}
-	return nil
+func viewAuthorizeResult(_ context.Context, qw *queryWork) (err error) {
+	return applyACL(qw)
 }
 func viewRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	err = validateFields(qw)
@@ -73,7 +48,7 @@ func viewRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 		return
 	}
 	oo := make([]*pipeline.WiredOperator, 0)
-	if len(qw.queryParams.Constraints.Include) != 0 {
+	if qw.queryParams.hasInclude() {
 		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, false)))
 	}
 	if len(qw.queryParams.Constraints.Order) != 0 || qw.queryParams.Constraints.Skip > 0 || qw.queryParams.Constraints.Limit > 0 {
@@ -89,7 +64,7 @@ func viewRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	if o != nil {
 		oo = append(oo, pipeline.WireAsyncOperator("Filter", o))
 	}
-	if len(qw.queryParams.Constraints.Keys) != 0 {
+	if qw.queryParams.hasKeys() {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
 	sender, respWriterGetter := qw.getArraySender()

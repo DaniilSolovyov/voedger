@@ -26,6 +26,7 @@ import (
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
+	"github.com/voedger/voedger/pkg/processors/oldacl"
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/state/stateprovide"
@@ -354,4 +355,155 @@ func splitPath(path string) (parts []string) {
 	}
 	parts = append(parts, string(current))
 	return parts
+}
+
+func applyACL(qw *queryWork) (err error) {
+
+	var fillFields func(qname appdef.QName, obj map[string]interface{})
+	fillFields = func(qname appdef.QName, obj map[string]interface{}) {
+		obj[appdef.SystemField_QName] = qname
+		iType := qw.appStructs.AppDef().Type(obj[appdef.SystemField_QName].(appdef.QName))
+
+		if withFields, ok := iType.(appdef.IWithFields); ok {
+			for _, field := range withFields.Fields() {
+				if field.IsSys() {
+					continue
+				}
+				obj[field.Name()] = !qw.queryParams.hasKeys()
+			}
+			for _, field := range withFields.RefFields() {
+				if field.IsSys() {
+					continue
+				}
+				rr := make([]appdef.QName, 0)
+				for _, name := range field.Refs() {
+					// Anti stack overflow when schema has reference to the same schema
+					if name == qname {
+						continue
+					}
+				}
+				oo := make([]map[string]interface{}, len(rr))
+				for i := range oo {
+					oo[i] = make(map[string]interface{})
+				}
+				for i, r := range rr {
+					fillFields(r, oo[i])
+				}
+				obj[field.Name()] = oo
+			}
+		}
+
+		if withContainers, ok := iType.(appdef.IWithContainers); ok {
+			for _, container := range withContainers.Containers() {
+				// Anti stack overflow when schema has reference to the same schema
+				if container.QName() == qname {
+					continue
+				}
+				obj[container.Name()] = make(map[string]interface{})
+				fillFields(container.QName(), obj[container.Name()].(map[string]interface{}))
+			}
+		}
+	}
+
+	var applyACLInternally func(obj map[string]interface{}) (err error)
+	applyACLInternally = func(obj map[string]interface{}) (err error) {
+		qname := obj[appdef.SystemField_QName].(appdef.QName)
+		fields := make([]string, 0)
+		for k, intf := range obj {
+			switch v := intf.(type) {
+			case bool:
+				fields = append(fields, k)
+			case map[string]interface{}:
+				err = applyACLInternally(v)
+				if err != nil {
+					return
+				}
+			case []map[string]interface{}:
+				for i := range v {
+					err = applyACLInternally(v[i])
+					if err != nil {
+						return
+					}
+				}
+			}
+		}
+		ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qname, fields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
+		if !ok {
+			if ok, err = qw.appPart.IsOperationAllowed(qw.iWorkspace, appdef.OperationKind_Select, qname, fields, qw.roles); err != nil {
+				return err
+			}
+		}
+		if !ok {
+			return coreutils.NewSysError(http.StatusForbidden)
+		}
+		return
+	}
+
+	var sweep func(obj map[string]interface{})
+	sweep = func(obj map[string]interface{}) {
+		for k, intf := range obj {
+			switch v := intf.(type) {
+			case bool:
+				if v {
+					continue
+				}
+			case appdef.QName:
+				continue
+			case map[string]interface{}:
+				sweep(v)
+				if len(v) == 0 {
+					delete(obj, k)
+				}
+			case []map[string]interface{}:
+				for i := range v {
+					sweep(v[i])
+					if len(v[i]) == 0 {
+						delete(obj, k)
+					}
+				}
+			}
+			delete(obj, k)
+		}
+	}
+
+	var mark func(obj map[string]interface{}, fields []string)
+	mark = func(obj map[string]interface{}, fields []string) {
+		for _, field := range fields {
+			switch v := obj[field].(type) {
+			case bool:
+				obj[field] = true
+			case map[string]interface{}:
+				mark(v, fields[1:])
+			case []map[string]interface{}:
+				for i := range v {
+					mark(v[i], fields[1:])
+				}
+			}
+		}
+	}
+
+	obj := make(map[string]interface{})
+
+	fillFields(qw.resultType.QName(), obj)
+
+	if !qw.queryParams.hasInclude() {
+		for field, intf := range obj {
+			switch intf.(type) {
+			case bool, appdef.QName:
+				continue
+			default:
+				delete(obj, field)
+			}
+		}
+	}
+
+	if qw.queryParams.hasKeys() {
+		for _, path := range qw.queryParams.Constraints.Keys {
+			mark(obj, splitPath(path))
+		}
+	}
+
+	sweep(obj)
+
+	return applyACLInternally(obj)
 }
